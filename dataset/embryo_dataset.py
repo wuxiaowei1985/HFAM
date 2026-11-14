@@ -2,7 +2,7 @@ from pathlib import Path
 from torch.utils.data import Dataset
 import re
 from dataset.utils.focus_loader import FocusLoader
-from dataset.annotation_reader import AnnotationLoader
+from dataset.utils.annotation_reader import AnnotationLoader
 
 pattern = re.compile(r"RUN(\d+)\.jpeg$")
 

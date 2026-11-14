@@ -29,6 +29,8 @@ venv.bak/
 # Jupyter Notebook 临时检查点
 .ipynb_checkpoints/
 
+#单元测试
+test/
 
 # 训练产生的日志和TensorBoard文件
 run/

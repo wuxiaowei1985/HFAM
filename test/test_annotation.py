@@ -1,4 +1,4 @@
-from dataset.annotation_reader import AnnotationLoader
+from dataset.utils.annotation_reader import AnnotationLoader
 from configs import config as cfg
 
 annotation_root = cfg.DATA_ROOT / "embryo_dataset_annotations"

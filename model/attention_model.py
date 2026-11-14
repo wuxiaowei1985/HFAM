@@ -1,10 +1,10 @@
 import torch
 import torch.nn as nn
-from model.utils.Backbone import Focal3DBackbone
-from model.utils.focus_attention import FocusAttention
-from model.utils.MSFD_Attention import MSFDAttention
-from model.utils.classifier import ClassificationHead
-from model.utils.coarse_embedding import CoarseEmbedding
+from model.module.Backbone import Focal3DBackbone
+from model.module.focus_attention import FocusAttention
+from model.module.MSFD_Attention import MSFDAttention
+from model.module.classifier import ClassificationHead
+from model.module.coarse_embedding import CoarseEmbedding
 
 class HierarchicalFocusAttentionModel(nn.Module):
     """
