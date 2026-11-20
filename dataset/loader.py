@@ -20,21 +20,18 @@ train_embryos, val_embryos, test_embryos = split_embryos(cfg.DATA_ROOT, seed=cfg
 
 train_dataset = TemporalEmbryoDataset(
     root=cfg.DATA_ROOT,
-    drop_non_contiguous=False,
     transform=TemporalFocusTransform(),
     embryo_list=train_embryos
 )
 
 val_dataset = TemporalEmbryoDataset(
     root=cfg.DATA_ROOT,
-    drop_non_contiguous=False,
     transform=TemporalFocusValTransform(),
     embryo_list=val_embryos
 )
 
 test_dataset = TemporalEmbryoDataset(
     root=cfg.DATA_ROOT,
-    drop_non_contiguous=False,
     transform=TemporalFocusValTransform(),
     embryo_list=test_embryos
 )
@@ -73,11 +70,14 @@ test_loader = DataLoader(
 )
 
 print(f"Train temporal samples: {len(train_dataset)}")
-print(f"Train dropped non-contiguous windows: {train_dataset.dropped_windows}")
+print(f"Train dropped windows: {train_dataset.dropped_windows}")
+print(f"Train masked windows: {train_dataset.masked_windows}")
 print(f"Train padded samples: {train_dataset.padded_samples}")
 print(f"Val temporal samples: {len(val_dataset)}")
-print(f"Val dropped non-contiguous windows: {val_dataset.dropped_windows}")
+print(f"Val dropped windows: {val_dataset.dropped_windows}")
+print(f"Val masked windows: {val_dataset.masked_windows}")
 print(f"Val padded samples: {val_dataset.padded_samples}")
 print(f"Test temporal samples: {len(test_dataset)}")
-print(f"Test dropped non-contiguous windows: {test_dataset.dropped_windows}")
+print(f"Test dropped windows: {test_dataset.dropped_windows}")
+print(f"Test masked windows: {test_dataset.masked_windows}")
 print(f"Test padded samples: {test_dataset.padded_samples}")

@@ -19,21 +19,24 @@ ROOT_MAP = {
 }
 
 class TemporalEmbryoDataset(Dataset):
-    def __init__(self, root, sequence_length=5, stride=1, drop_non_contiguous=False, transform=None, embryo_list=None):
+    def __init__(self, root, sequence_length=5, stride=1, missing_frame_mode="keep", transform=None, embryo_list=None):
         self.root = Path(root)
         self.sequence_length = sequence_length
         self.stride = stride
-        self.drop_non_contiguous = drop_non_contiguous
+        self.missing_frame_mode = missing_frame_mode
         self.transform = transform
         self.loader = FocusLoader(root)
         self.annotation = AnnotationLoader(self.root / "embryo_dataset_annotations")
         self.samples = []
         self.dropped_windows = 0
         self.padded_samples = 0
+        self.masked_windows = 0
         if self.sequence_length < 1:
             raise ValueError("sequence_length must be >= 1.")
         if self.stride < 1:
             raise ValueError("stride must be >= 1.")
+        if self.missing_frame_mode not in {"keep", "drop", "mask"}:
+            raise ValueError("missing_frame_mode must be one of {'keep', 'drop', 'mask'}.")
         embryo_root = self.root / "embryo_dataset"
         if embryo_list is None:
             embryo_dirs = [p for p in embryo_root.iterdir() if p.is_dir()]
@@ -51,46 +54,78 @@ class TemporalEmbryoDataset(Dataset):
             run_ids = sorted(run_files.keys())
             if not run_ids:
                 continue
-            if len(run_ids) < self.sequence_length:
-                self._add_sample(embryo_name, run_ids, run_files)
-                continue
-            for start in range(0, len(run_ids) - self.sequence_length + 1, self.stride):
-                window_runs = run_ids[start:start + self.sequence_length]
-                if self.drop_non_contiguous and not self._is_contiguous(window_runs):
-                    self.dropped_windows += 1
-                    continue
-                self._add_sample(embryo_name, window_runs, run_files)
+            if self.missing_frame_mode == "mask":
+                self._build_mask_mode_samples(embryo_name, run_ids, run_files)
+            else:
+                self._build_keep_or_drop_samples(embryo_name, run_ids, run_files)
 
-    def _add_sample(self, embryo_name, window_runs, run_files):
+    def _build_keep_or_drop_samples(self, embryo_name, run_ids, run_files):
+        if len(run_ids) < self.sequence_length:
+            if self.missing_frame_mode == "drop" and not self._is_contiguous(run_ids):
+                self.dropped_windows += 1
+                return
+            self._add_sample(embryo_name, run_ids, run_files, frame_mask=[True] * len(run_ids))
+            return
+        for start in range(0, len(run_ids) - self.sequence_length + 1, self.stride):
+            window_runs = run_ids[start:start + self.sequence_length]
+            contiguous = self._is_contiguous(window_runs)
+            if self.missing_frame_mode == "drop" and not contiguous:
+                self.dropped_windows += 1
+                continue
+            self._add_sample(embryo_name, window_runs, run_files, frame_mask=[True] * len(window_runs))
+
+    def _build_mask_mode_samples(self, embryo_name, run_ids, run_files):
+        min_run = run_ids[0]
+        max_run = run_ids[-1]
+        if max_run - min_run + 1 <= self.sequence_length:
+            expected_runs = list(range(min_run, max_run + 1))
+            frame_mask = [run_id in run_files for run_id in expected_runs]
+            self._add_sample(embryo_name, expected_runs, run_files, frame_mask=frame_mask)
+            return
+        for start_run in range(min_run, max_run - self.sequence_length + 2, self.stride):
+            window_runs = list(range(start_run, start_run + self.sequence_length))
+            frame_mask = [run_id in run_files for run_id in window_runs]
+            if not all(frame_mask):
+                self.masked_windows += 1
+            self._add_sample(embryo_name, window_runs, run_files, frame_mask=frame_mask)
+
+    def _add_sample(self, embryo_name, window_runs, run_files, frame_mask):
         if not window_runs:
             return
-        target_run = window_runs[-1]
+        valid_runs = [run_id for run_id, valid in zip(window_runs, frame_mask) if valid]
+        if not valid_runs:
+            return
+        target_run = valid_runs[-1]
         target_label = self.annotation.get_label(embryo_name, target_run)
         if target_label < 0:
             return
-        valid = True
-        for run_id in window_runs:
+        for run_id, valid in zip(window_runs, frame_mask):
+            if not valid:
+                continue
             image_name = run_files[run_id]
             for focus in FOCUS_ORDER:
                 focus_path = self.root / ROOT_MAP[focus] / embryo_name / image_name
                 if not focus_path.exists():
-                    valid = False
+                    valid_index = window_runs.index(run_id)
+                    frame_mask[valid_index] = False
                     break
-            if not valid:
-                break
-        if not valid:
+        if not any(frame_mask):
             return
+        valid_length = sum(frame_mask)
         padding_length = self.sequence_length - len(window_runs)
         if padding_length > 0:
             self.padded_samples += 1
+        if any(not value for value in frame_mask):
+            self.masked_windows += 1
         self.samples.append({
             "embryo": embryo_name,
-            "image_names": [run_files[r] for r in window_runs],
+            "image_names": [run_files[r] if mask else None for r, mask in zip(window_runs, frame_mask)],
             "runs": window_runs,
             "target_run": target_run,
             "label": target_label,
-            "valid_length": len(window_runs),
-            "padding_length": padding_length
+            "valid_length": valid_length,
+            "padding_length": padding_length,
+            "frame_mask": frame_mask
         })
 
     @staticmethod
@@ -104,8 +139,11 @@ class TemporalEmbryoDataset(Dataset):
         sample = self.samples[idx]
         sequence_images = []
         for image_name in sample["image_names"]:
-            images = self.loader.load_focus_images(sample["embryo"], image_name)
-            sequence_images.append(images)
+            if image_name is None:
+                sequence_images.append(None)
+            else:
+                images = self.loader.load_focus_images(sample["embryo"], image_name)
+                sequence_images.append(images)
         if self.transform is not None:
             sequence_images = self.transform(sequence_images)
         return {

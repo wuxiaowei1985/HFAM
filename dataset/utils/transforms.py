@@ -34,7 +34,12 @@ class TemporalFocusTransform:
     def __call__(self, sequence_images):
         if len(sequence_images) == 0:
             raise ValueError("Temporal sequence cannot be empty.")
-        output = [self.focus_transform(images) for images in sequence_images]
+        output = []
+        for images in sequence_images:
+            if images is None:
+                output.append(torch.zeros(7, 1, self.image_size, self.image_size, dtype=torch.float32))
+            else:
+                output.append(self.focus_transform(images))
         return torch.stack(output, dim=0)
 
 class FocusValTransform(FocusTransform):
