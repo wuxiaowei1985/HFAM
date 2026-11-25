@@ -19,7 +19,7 @@ ROOT_MAP = {
 }
 
 class TemporalEmbryoDataset(Dataset):
-    def __init__(self, root, sequence_length=5, stride=1, missing_frame_mode="keep", transform=None, embryo_list=None):
+    def __init__(self, root, sequence_length=5, stride=1, missing_frame_mode="mask", transform=None, embryo_list=None):
         self.root = Path(root)
         self.sequence_length = sequence_length
         self.stride = stride
@@ -38,11 +38,15 @@ class TemporalEmbryoDataset(Dataset):
         if self.missing_frame_mode not in {"keep", "drop", "mask"}:
             raise ValueError("missing_frame_mode must be one of {'keep', 'drop', 'mask'}.")
         embryo_root = self.root / "embryo_dataset"
+        if not embryo_root.exists():
+            raise FileNotFoundError(f"Embryo dataset directory does not exist: {embryo_root}")
         if embryo_list is None:
             embryo_dirs = [p for p in embryo_root.iterdir() if p.is_dir()]
         else:
             embryo_dirs = [embryo_root / e for e in embryo_list]
         for embryo_dir in embryo_dirs:
+            if not embryo_dir.exists():
+                continue
             embryo_name = embryo_dir.name
             run_files = {}
             for img in embryo_dir.glob("*.jpeg"):
@@ -92,6 +96,19 @@ class TemporalEmbryoDataset(Dataset):
     def _add_sample(self, embryo_name, window_runs, run_files, frame_mask):
         if not window_runs:
             return
+        frame_mask = list(frame_mask)
+        for index, (run_id, valid) in enumerate(zip(window_runs, frame_mask)):
+            if not valid:
+                continue
+            image_name = run_files.get(run_id)
+            if image_name is None:
+                frame_mask[index] = False
+                continue
+            for focus in FOCUS_ORDER:
+                focus_path = self.root / ROOT_MAP[focus] / embryo_name / image_name
+                if not focus_path.exists():
+                    frame_mask[index] = False
+                    break
         valid_runs = [run_id for run_id, valid in zip(window_runs, frame_mask) if valid]
         if not valid_runs:
             return
@@ -99,18 +116,13 @@ class TemporalEmbryoDataset(Dataset):
         target_label = self.annotation.get_label(embryo_name, target_run)
         if target_label < 0:
             return
+        frame_labels = []
         for run_id, valid in zip(window_runs, frame_mask):
             if not valid:
+                frame_labels.append(-100)
                 continue
-            image_name = run_files[run_id]
-            for focus in FOCUS_ORDER:
-                focus_path = self.root / ROOT_MAP[focus] / embryo_name / image_name
-                if not focus_path.exists():
-                    valid_index = window_runs.index(run_id)
-                    frame_mask[valid_index] = False
-                    break
-        if not any(frame_mask):
-            return
+            frame_label = self.annotation.get_label(embryo_name, run_id)
+            frame_labels.append(frame_label if frame_label >= 0 else -100)
         valid_length = sum(frame_mask)
         padding_length = self.sequence_length - len(window_runs)
         if padding_length > 0:
@@ -123,6 +135,7 @@ class TemporalEmbryoDataset(Dataset):
             "runs": window_runs,
             "target_run": target_run,
             "label": target_label,
+            "frame_labels": frame_labels,
             "valid_length": valid_length,
             "padding_length": padding_length,
             "frame_mask": frame_mask
@@ -142,8 +155,7 @@ class TemporalEmbryoDataset(Dataset):
             if image_name is None:
                 sequence_images.append(None)
             else:
-                images = self.loader.load_focus_images(sample["embryo"], image_name)
-                sequence_images.append(images)
+                sequence_images.append(self.loader.load_focus_images(sample["embryo"], image_name))
         if self.transform is not None:
             sequence_images = self.transform(sequence_images)
         return {

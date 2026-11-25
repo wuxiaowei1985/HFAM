@@ -6,3 +6,6 @@ timm
 matplotlib
 tqdm
 Pillow
+torchnd
+torch-ms-deform-attn
+efficient-kan
