@@ -70,12 +70,13 @@ class FocusAttention(nn.Module):
         token_weight = torch.softmax(token_score, dim=-1)
         token_weight_3d = token_weight.view(B * T, self.num_focus, self.query_h * self.query_w)
         focus_weight = token_weight_3d.sum(dim=-1)
-        focus_weight = focus_weight.view(B, T, self.num_focus)
+        focus_weight = focus_weight / focus_weight.sum(dim=-1, keepdim=True).clamp_min(1e-8)
         sequence = x.view(B, T, self.num_tokens, D)
-        focus_weight_spatial = token_weight_3d.view(B * T, self.num_focus, self.query_h * self.query_w, 1)
         sequence_3d = sequence.view(B * T, self.num_focus, self.query_h * self.query_w, D)
+        focus_weight_spatial = focus_weight.view(B * T, self.num_focus, 1, 1)
         focus_feature = torch.sum(sequence_3d * focus_weight_spatial, dim=1)
         focus_feature = focus_feature.view(B, T, self.query_h * self.query_w, D)
+        focus_weight = focus_weight.view(B, T, self.num_focus)
         if return_sequence:
             return sequence, focus_feature, token_weight.view(B, T, self.num_tokens), focus_weight
         return focus_feature, focus_weight

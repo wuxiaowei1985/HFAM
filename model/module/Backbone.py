@@ -76,7 +76,7 @@ class Focal4DBackbone(nn.Module):
         )
         self.p4_projection = ConvNd(512, embed_dim, 1, dim=(-4, -3, -2, -1), bias=False)
         self.p4_norm = nn.GroupNorm(32, embed_dim)
-        self.patch_embed = ConvNd(embed_dim, embed_dim, kernel=(1, 1, 2, 2), dim=(-4, -3, -2, -1), stride=(1, 1, 2, 2), bias=False)
+        self.patch_embed = ConvNd(embed_dim, embed_dim, kernel_size=(1, 1, 2, 2), dim=(-4, -3, -2, -1), stride=(1, 1, 2, 2), bias=False)
         self.patch_norm = nn.LayerNorm(embed_dim)
         self._init_weights()
 

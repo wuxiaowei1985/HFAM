@@ -29,7 +29,7 @@ class HierarchicalFocusAttentionModel(nn.Module):
             raise ValueError("image_size must be 224.")
         if coarse != 3 or pronuclear != 3 or cleavage != 8 or blastocyst != 5:
             raise ValueError("Expected expert class numbers: 3, 3, 8, 5.")
-        if coarse + pronuclear + cleavage + blastocyst != 19:
+        if pronuclear + cleavage + blastocyst != 16:
             raise ValueError("Invalid hierarchical classification configuration.")
         self.feature_dim = feature_dim
         self.sequence_length = sequence_length

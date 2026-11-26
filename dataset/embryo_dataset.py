@@ -89,8 +89,6 @@ class TemporalEmbryoDataset(Dataset):
         for start_run in range(min_run, max_run - self.sequence_length + 2, self.stride):
             window_runs = list(range(start_run, start_run + self.sequence_length))
             frame_mask = [run_id in run_files for run_id in window_runs]
-            if not all(frame_mask):
-                self.masked_windows += 1
             self._add_sample(embryo_name, window_runs, run_files, frame_mask=frame_mask)
 
     def _add_sample(self, embryo_name, window_runs, run_files, frame_mask):

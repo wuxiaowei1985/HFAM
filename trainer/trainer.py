@@ -4,7 +4,6 @@ from tqdm import tqdm
 from dataset.labels import get_coarse_label
 from configs import config as cfg
 
-
 class Trainer:
     def __init__(self, model, criterion, optimizer, device, final_loss_weight=1.0, coarse_loss_weight=0.5, frame_loss_weight=1.0, coarse_frame_loss_weight=0.5):
         self.model = model.to(device)
@@ -30,11 +29,11 @@ class Trainer:
     def _compute_loss(self, output, labels, frame_labels):
         coarse_labels = torch.tensor([get_coarse_label(int(label)) for label in labels], device=self.device, dtype=torch.long)
         coarse_frame_labels = self.build_coarse_frame_labels(frame_labels)
-        final_loss = self.criterion(output["final_logits"].float(), labels)
+        final_loss = F.nll_loss(output["final_log_probs"].float(), labels)
         coarse_loss = F.cross_entropy(output["coarse_logits"].float(), coarse_labels, label_smoothing=cfg.LABEL_SMOOTHING)
-        frame_loss = F.cross_entropy(output["frame_logits"].float().reshape(-1, 16), frame_labels.reshape(-1), ignore_index=-100, label_smoothing=cfg.LABEL_SMOOTHING)
+        frame_loss = F.nll_loss(output["final_frame_log_probs"].float().reshape(-1, 16), frame_labels.reshape(-1), ignore_index=-100)
         coarse_frame_loss = F.cross_entropy(output["coarse_frame_logits"].float().reshape(-1, 3), coarse_frame_labels.reshape(-1), ignore_index=-100, label_smoothing=cfg.LABEL_SMOOTHING)
-        loss = (self.final_loss_weight * final_loss + self.coarse_loss_weight * coarse_loss + self.frame_loss_weight * frame_loss + self.coarse_frame_loss_weight * coarse_frame_loss)
+        loss = self.final_loss_weight * final_loss + self.coarse_loss_weight * coarse_loss + self.frame_loss_weight * frame_loss + self.coarse_frame_loss_weight * coarse_frame_loss
         return loss, final_loss, coarse_loss, frame_loss, coarse_frame_loss, coarse_labels
 
     def train_one_epoch(self, loader):
@@ -61,7 +60,7 @@ class Trainer:
             self.scaler.step(self.optimizer)
             self.scaler.update()
             batch_size = labels.size(0)
-            preds = output["final_logits"].float().argmax(dim=1)
+            preds = output["final_log_probs"].float().argmax(dim=1)
             coarse_preds = output["coarse_logits"].float().argmax(dim=1)
             total_loss += loss.item() * batch_size
             total_final_loss += final_loss.item() * batch_size
@@ -104,7 +103,7 @@ class Trainer:
             output = self.model({"images": images, "temporal_mask": temporal_mask, "label": labels}, return_dict=True)
             loss, final_loss, coarse_loss, frame_loss, coarse_frame_loss, coarse_labels = self._compute_loss(output, labels, frame_labels)
             batch_size = labels.size(0)
-            preds = output["final_logits"].float().argmax(dim=1)
+            preds = output["final_log_probs"].float().argmax(dim=1)
             coarse_preds = output["coarse_logits"].float().argmax(dim=1)
             total_loss += loss.item() * batch_size
             total_final_loss += final_loss.item() * batch_size
