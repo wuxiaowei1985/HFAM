@@ -146,7 +146,7 @@ class HierarchicalFocusAttentionModel(nn.Module):
         expert_frame_probs = {}
         for expert_name in ("pronuclear", "cleavage", "blastocyst"):
             # Independent MSFD Attention
-            expert_feature = self.msfd_attention[expert_name](fine_query_tokens, pyramid, focus_weight)
+            expert_feature = self.msfd_attention[expert_name](fine_query_tokens, pyramid)
             # Independent Temporal Transformer
             expert_feature = self.fine_temporal_transformer[expert_name](expert_feature, temporal_mask=frame_mask)
             # Spatial Pooling

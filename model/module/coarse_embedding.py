@@ -4,16 +4,17 @@ import torch.nn as nn
 class CoarseEmbedding(nn.Module):
     """
     Input: coarse_probs [B,T,3]
-    Learnable embedding: [3,T,49,512]
-    Output: [B,T,49,512]
+    Learnable embedding: [3,T, 7, 49,512]
+    Output: [B,T,343,512]
     """
-    def __init__(self, num_classes=3, sequence_length=5, num_tokens=49, feature_dim=512, dropout=0.0):
+    def __init__(self, num_classes=3, sequence_length=5, num_focus=7, num_tokens=49, feature_dim=512, dropout=0.0):
         super().__init__()
         self.num_classes = num_classes
         self.sequence_length = sequence_length
+        self.num_focus = num_focus
         self.num_tokens = num_tokens
         self.feature_dim = feature_dim
-        self.class_embedding = nn.Parameter(torch.empty(num_classes, sequence_length, num_tokens, feature_dim))
+        self.class_embedding = nn.Parameter(torch.empty(num_classes, sequence_length, num_focus, num_tokens, feature_dim))
         self.norm = nn.LayerNorm(feature_dim)
         self.dropout = nn.Dropout(dropout)
         nn.init.trunc_normal_(self.class_embedding, std=0.02)
@@ -27,6 +28,7 @@ class CoarseEmbedding(nn.Module):
         if C != self.num_classes:
             raise ValueError(f"Expected C={self.num_classes}, got C={C}")
         embedding = torch.einsum("btc,ctnd->btnd", coarse_probs, self.class_embedding)
+        embedding = embedding.view(B, T, self.num_focus * self.num_tokens, self.feature_dim)
         embedding = self.norm(embedding)
         embedding = self.dropout(embedding)
         return embedding
