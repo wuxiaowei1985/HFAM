@@ -27,8 +27,8 @@ class CoarseEmbedding(nn.Module):
             raise ValueError(f"Expected T={self.sequence_length}, got T={T}")
         if C != self.num_classes:
             raise ValueError(f"Expected C={self.num_classes}, got C={C}")
-        embedding = torch.einsum("btc,ctnd->btnd", coarse_probs, self.class_embedding)
-        embedding = embedding.view(B, T, self.num_focus * self.num_tokens, self.feature_dim)
+        embedding = torch.einsum("btc,ctfnd->btfnd", coarse_probs, self.class_embedding)
+        embedding = embedding.reshape(B, T, self.num_focus * self.num_tokens, self.feature_dim)
         embedding = self.norm(embedding)
         embedding = self.dropout(embedding)
         return embedding

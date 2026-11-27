@@ -136,7 +136,7 @@ class HierarchicalFocusAttentionModel(nn.Module):
         # 5. Coarse Embedding
         # --------------------------------------------------
         coarse_embedding = self.coarse_embedding(coarse_frame_probs)
-        fine_query_tokens = focus_feature + coarse_embedding
+        fine_query_tokens = focus_tokens + coarse_embedding
         # --------------------------------------------------
         # 6. Three Independent Fine Experts
         # --------------------------------------------------
