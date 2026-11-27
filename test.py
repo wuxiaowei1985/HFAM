@@ -7,29 +7,62 @@ from utils.get_model import build_model
 from dataset.labels import LABEL_NAMES
 
 CLASSES_NUM = len(LABEL_NAMES)
-# ============================================================
-# 16类最终概率
-# coarse:
-#   0 -> pronuclear: tPB2 / tPNa / tPNf
-#   1 -> cleavage:   t2 ~ t9+
-#   2 -> blastocyst: tM / tSB / tB / tEB / tHB
-# final_probs:
-#   [3 + 8 + 5] = 16
-# ============================================================
-# Soft Routing
-# ============================================================
-def get_final_log_probs(output, num_classes=CLASSES_NUM):
-    """
-    直接使用模型输出的 log-space 概率，与训练/验证保持一致。
-    """
-    final_log_probs = output["final_log_probs"]
-    assert final_log_probs.dim() == 2
-    assert final_log_probs.size(1) == num_classes
-    log_sum = torch.logsumexp(final_log_probs, dim=1)
-    assert torch.allclose(log_sum, torch.zeros_like(log_sum), atol=1e-4)
-    return final_log_probs
+
+def calculate_class_accuracy(labels, predictions, metric_name):
+    result = []
+    for class_index, class_name in enumerate(LABEL_NAMES):
+        class_indices = [index for index, label in enumerate(labels) if label == class_index]
+        total = len(class_indices)
+        correct = sum(predictions[index] == class_index for index in class_indices)
+        accuracy = correct / total * 100 if total else 0.0
+        result.append({
+            "Stage": class_name,
+            "Correct": correct,
+            "Total": total,
+            "Accuracy(%)": round(accuracy, 2)
+        })
+    return pd.DataFrame(result)
+
+def save_metrics(labels, predictions, prefix, class_accuracy_path=None, report_path=None, cm_path=None):
+    if not labels:
+        raise ValueError(f"No valid {prefix} labels were collected.")
+    class_accuracy = calculate_class_accuracy(labels, predictions, prefix)
+    report_dict = classification_report(labels, predictions, labels=list(range(CLASSES_NUM)), target_names=LABEL_NAMES, digits=4, zero_division=0, output_dict=True)
+    report_text = classification_report(labels, predictions, labels=list(range(CLASSES_NUM)), target_names=LABEL_NAMES, digits=4, zero_division=0)
+    confusion = confusion_matrix(labels, predictions, labels=list(range(CLASSES_NUM)))
+    print(f"\n{prefix} Classification Report\n")
+    print(report_text)
+    print(f"{prefix} Accuracy: {(sum(int(gt == pred) for gt, pred in zip(labels, predictions)) / len(labels)) * 100:.2f}%")
+    if class_accuracy_path is not None:
+        class_accuracy.to_csv(class_accuracy_path, index=False, encoding="utf-8-sig")
+    if report_path is not None:
+        rows = []
+        for class_name in LABEL_NAMES:
+            metrics = report_dict[class_name]
+            rows.append({
+                "class": class_name,
+                "precision": metrics["precision"],
+                "recall": metrics["recall"],
+                "f1-score": metrics["f1-score"],
+                "support": metrics["support"]
+            })
+        for avg_type in ("macro avg", "weighted avg"):
+            metrics = report_dict[avg_type]
+            rows.append({
+                "class": avg_type,
+                "precision": metrics["precision"],
+                "recall": metrics["recall"],
+                "f1-score": metrics["f1-score"],
+                "support": metrics["support"]
+            })
+        pd.DataFrame(rows).to_csv(report_path, index=False, encoding="utf-8-sig")
+    if cm_path is not None:
+        cm_df = pd.DataFrame(confusion, index=LABEL_NAMES, columns=LABEL_NAMES)
+        cm_df.to_csv(cm_path, encoding="utf-8-sig")
+    return sum(int(gt == pred) for gt, pred in zip(labels, predictions)) / len(labels)
 
 def main():
+    cfg.RUN_DIR.mkdir(parents=True, exist_ok=True)
     model = build_model(cfg.CURRENT_MODEL)
     print("=" * 70)
     print("Loading model")
@@ -39,150 +72,99 @@ def main():
     model.to(cfg.DEVICE)
     model.eval()
     print("Model loaded successfully.")
-    correct_per_class = torch.zeros(CLASSES_NUM, dtype=torch.int64)
-    total_per_class = torch.zeros(CLASSES_NUM, dtype=torch.int64)
-    overall_correct = 0
-    overall_total = 0
-    all_labels = []
-    all_preds = []
+    use_amp = cfg.DEVICE.type == "cuda"
+    sample_labels = []
+    sample_predictions = []
+    sample_records = []
+    frame_predictions = {}
     with torch.no_grad():
         for batch in test_loader:
-            batch["images"] = batch["images"].to(cfg.DEVICE)
-            batch["label"] = batch["label"].to(cfg.DEVICE)
-            labels = batch["label"]
-            output = model(batch, stage="fine", return_dict=True)
-            final_log_probs = get_final_log_probs(output)
-            preds = torch.argmax(final_log_probs, dim=1)
-            overall_correct += (preds == labels).sum().item()
-            overall_total += labels.size(0)
-            all_labels.extend(labels.cpu().numpy())
-            all_preds.extend(preds.cpu().numpy())
-            for gt, pred in zip(labels, preds):
-                gt = gt.item()
-                pred = pred.item()
-                total_per_class[gt] += 1
-                if gt == pred:
-                    correct_per_class[gt] += 1
-    # ========================================================
-    # Per-class Accuracy
-    # ========================================================
-    print("=" * 70)
-    print("Per-class Accuracy")
-    print("=" * 70)
-    result = []
-    for i in range(CLASSES_NUM):
-        if total_per_class[i] == 0:
-            acc = 0.0
-        else:
-            acc = (correct_per_class[i].item() / total_per_class[i].item() * 100)
-        print(
-            f"{LABEL_NAMES[i]:5s}"
-            f"   {correct_per_class[i]:4d}/{total_per_class[i]:4d}"
-            f"   Accuracy = {acc:.2f}%"
-        )
-        result.append(
-            {
-                "Stage": LABEL_NAMES[i],
-                "Correct": int(correct_per_class[i]),
-                "Total": int(total_per_class[i]),
-                "Accuracy(%)": round(acc, 2)
-            }
-        )
-    # ========================================================
-    # 保存 Per-class Accuracy
-    # ========================================================
-    df = pd.DataFrame(result)
-    df.to_csv(cfg.SAVE_RESULT_DIR, index=False, encoding="utf-8-sig")
-    # ========================================================
-    # Overall Accuracy
-    # ========================================================
-    if overall_total == 0:
-        overall_acc = 0.0
-    else:
-        overall_acc = (overall_correct / overall_total * 100)
-    print("\n")
-    print("=" * 70)
-    print(f"Overall Accuracy : {overall_acc:.2f}%")
-    print("=" * 70)
-    # ========================================================
-    # Classification Report
-    # ========================================================
-    print("\nClassification Report\n")
-    # --------------------------------------------------------
-    # 文本形式
-    # --------------------------------------------------------
-    report_text = classification_report(
-        all_labels,
-        all_preds,
-        labels=list(range(CLASSES_NUM)),
-        target_names=LABEL_NAMES,
-        digits=4,
-        zero_division=0
+            images = batch["images"].to(cfg.DEVICE, non_blocking=True)
+            temporal_mask = batch["temporal_mask"].to(cfg.DEVICE, non_blocking=True)
+            labels = batch["label"].to(cfg.DEVICE, non_blocking=True).long()
+            with torch.autocast(device_type=cfg.DEVICE.type, dtype=torch.float16, enabled=use_amp):
+                output = model({"images": images, "temporal_mask": temporal_mask, "label": labels}, return_dict=True)
+            sample_probs = output["final_log_probs"].float().exp()
+            sample_preds = sample_probs.argmax(dim=1)
+            frame_probs = output["final_frame_log_probs"].float().exp().cpu()
+            frame_labels = batch["frame_labels"].cpu()
+            temporal_mask_cpu = batch["temporal_mask"].cpu()
+            for batch_index, (embryo, runs) in enumerate(zip(batch["embryo"], batch["runs"])):
+                true_label = int(labels[batch_index])
+                pred_label = int(sample_preds[batch_index])
+                target_run = int(batch["target_run"][batch_index])
+                sample_labels.append(true_label)
+                sample_predictions.append(pred_label)
+                sample_records.append({
+                    "Embryo": embryo,
+                    "Target_RUN": target_run,
+                    "True_Label": LABEL_NAMES[true_label],
+                    "True_Label_ID": true_label,
+                    "Pred_Label": LABEL_NAMES[pred_label],
+                    "Pred_Label_ID": pred_label,
+                    "Correct": int(true_label == pred_label)
+                })
+                for time_index, run_id in enumerate(runs):
+                    if time_index >= frame_labels.size(1) or not temporal_mask_cpu[batch_index, time_index]:
+                        continue
+                    frame_label = int(frame_labels[batch_index, time_index])
+                    if frame_label < 0:
+                        continue
+                    key = (embryo, int(run_id))
+                    probability = frame_probs[batch_index, time_index]
+                    if key not in frame_predictions:
+                        frame_predictions[key] = {
+                            "prob_sum": probability.clone(),
+                            "count": 1,
+                            "label": frame_label
+                        }
+                    else:
+                        if frame_predictions[key]["label"] != frame_label:
+                            raise ValueError(f"Inconsistent labels for frame {key}.")
+                        frame_predictions[key]["prob_sum"] += probability
+                        frame_predictions[key]["count"] += 1
+    frame_labels_list = []
+    frame_predictions_list = []
+    frame_records = []
+    for (embryo, run_id), item in frame_predictions.items():
+        mean_probability = item["prob_sum"] / item["count"]
+        pred_label = int(mean_probability.argmax())
+        true_label = item["label"]
+        frame_labels_list.append(true_label)
+        frame_predictions_list.append(pred_label)
+        frame_records.append({
+            "Embryo": embryo,
+            "RUN": run_id,
+            "True_Label": LABEL_NAMES[true_label],
+            "True_Label_ID": true_label,
+            "Pred_Label": LABEL_NAMES[pred_label],
+            "Pred_Label_ID": pred_label,
+            "Window_Count": item["count"],
+            "Correct": int(true_label == pred_label)
+        })
+    sample_accuracy = save_metrics(
+        sample_labels,
+        sample_predictions,
+        "Sample",
+        class_accuracy_path=cfg.SAVE_RESULT_DIR,
+        report_path=cfg.SAVE_REPORT_DIR,
+        cm_path=cfg.SAVE_CM_DIR
     )
-    print(report_text)
-    # --------------------------------------------------------
-    # 字典形式，用于保存 CSV
-    # --------------------------------------------------------
-    report_dict = classification_report(
-        all_labels,
-        all_preds,
-        labels=list(range(CLASSES_NUM)),
-        target_names=LABEL_NAMES,
-        digits=4,
-        zero_division=0,
-        output_dict=True
+    frame_accuracy = save_metrics(
+        frame_labels_list,
+        frame_predictions_list,
+        "Frame",
+        class_accuracy_path=cfg.RUN_DIR / "frame_class_accuracy.csv",
+        report_path=cfg.RUN_DIR / "frame_classification_report.csv",
+        cm_path=cfg.RUN_DIR / "frame_confusion_matrix.csv"
     )
-    # ========================================================
-    # 保存 Classification Report
-    # ========================================================
-    rows = []
-    for class_name in LABEL_NAMES:
-        if class_name in report_dict:
-            metrics = report_dict[class_name]
-            rows.append(
-                {
-                    "class": class_name,
-                    "precision": metrics["precision"],
-                    "recall": metrics["recall"],
-                    "f1-score": metrics["f1-score"],
-                    "support": metrics["support"]
-                }
-            )
-    for avg_type in ["macro avg", "weighted avg"]:
-        if avg_type in report_dict:
-            metrics = report_dict[avg_type]
-            rows.append(
-                {
-                    "class": avg_type,
-                    "precision": metrics["precision"],
-                    "recall": metrics["recall"],
-                    "f1-score": metrics["f1-score"],
-                    "support": metrics["support"]
-                }
-            )
-    rows.append(
-        {
-            "class": "accuracy",
-            "precision": None,
-            "recall": None,
-            "f1-score": None,
-            "support": round(overall_acc, 2)
-        }
-    )
-    df_report = pd.DataFrame(rows)
-    df_report.to_csv(cfg.SAVE_REPORT_DIR, index=False, encoding="utf-8-sig")
-    # ========================================================
-    # Confusion Matrix
-    # ========================================================
-    cm = confusion_matrix(all_labels, all_preds, labels=list(range(CLASSES_NUM)))
-    print("\nConfusion Matrix\n")
-    print(cm)
-    cm_df = pd.DataFrame(cm, index=LABEL_NAMES, columns=LABEL_NAMES)
-    cm_df.to_csv(cfg.SAVE_CM_DIR, encoding="utf-8-sig")
-    print("\n")
+    pd.DataFrame(sample_records).to_csv(cfg.RUN_DIR / "sample_predictions.csv", index=False, encoding="utf-8-sig")
+    pd.DataFrame(frame_records).to_csv(cfg.RUN_DIR / "frame_predictions.csv", index=False, encoding="utf-8-sig")
+    print("\n" + "=" * 70)
+    print(f"Sample Accuracy : {sample_accuracy * 100:.2f}% ({len(sample_labels)} samples)")
+    print(f"Frame Accuracy  : {frame_accuracy * 100:.2f}% ({len(frame_labels_list)} unique frames)")
     print("=" * 70)
     print("Testing completed.")
-    print("=" * 70)
 
 if __name__ == "__main__":
     main()
