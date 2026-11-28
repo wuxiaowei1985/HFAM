@@ -44,7 +44,9 @@ train_loader = DataLoader(
     collate_fn=temporal_embryo_collate_fn,
     generator=g,
     worker_init_fn=seed_worker,
-    pin_memory=torch.cuda.is_available()
+    pin_memory=torch.cuda.is_available(),
+    persistent_workers=(cfg.NUM_WORKERS > 0),
+    prefetch_factor=4 if cfg.NUM_WORKERS > 0 else None,
 )
 
 val_loader = DataLoader(
@@ -55,7 +57,9 @@ val_loader = DataLoader(
     collate_fn=temporal_embryo_collate_fn,
     generator=g,
     worker_init_fn=seed_worker,
-    pin_memory=torch.cuda.is_available()
+    pin_memory=torch.cuda.is_available(),
+    persistent_workers=(cfg.NUM_WORKERS > 0),
+    prefetch_factor=4 if cfg.NUM_WORKERS > 0 else None,
 )
 
 test_loader = DataLoader(
@@ -66,7 +70,9 @@ test_loader = DataLoader(
     collate_fn=temporal_embryo_collate_fn,
     generator=g,
     worker_init_fn=seed_worker,
-    pin_memory=torch.cuda.is_available()
+    pin_memory=torch.cuda.is_available(),
+    persistent_workers=(cfg.NUM_WORKERS > 0),
+    prefetch_factor=4 if cfg.NUM_WORKERS > 0 else None,
 )
 
 print(f"Train temporal samples: {len(train_dataset)}")

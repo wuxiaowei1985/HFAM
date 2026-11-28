@@ -1,6 +1,30 @@
 import torch
 import torch.nn as nn
 
+class TFFusionBlock(nn.Module):
+    def __init__(self, feature_dim=512, num_heads=4, dropout=0.1):
+        super().__init__()
+        if feature_dim % num_heads != 0:
+            raise ValueError("feature_dim must be divisible by num_heads.")
+        self.norm_q = nn.LayerNorm(feature_dim)
+        self.norm_kv = nn.LayerNorm(feature_dim)
+        self.cross_attention = nn.MultiheadAttention(feature_dim, num_heads, dropout=dropout, batch_first=True)
+        self.norm_ffn = nn.LayerNorm(feature_dim)
+        self.ffn = nn.Sequential(
+            nn.Linear(feature_dim, feature_dim * 4),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(feature_dim * 4, feature_dim),
+            nn.Dropout(dropout)
+        )
+
+    def forward(self, query, key_value, key_padding_mask=None):
+        kv = self.norm_kv(key_value)
+        fused, _ = self.cross_attention(self.norm_q(query), kv, kv, key_padding_mask=key_padding_mask, need_weights=False,)
+        query = query + fused
+        query = query + self.ffn(self.norm_ffn(query))
+        return query
+
 class TF_fusion(nn.Module):
     """
     Spatial branch: [5B,7*49,512]
@@ -9,25 +33,22 @@ class TF_fusion(nn.Module):
         frame_features:  [B,5,512]
         sample_feature:  [B,512]
     """
-    def __init__(self, feature_dim=512, num_heads=4, sequence_length=5, num_focus=7, num_tokens=49, dropout=0.1):
+    def __init__(self, feature_dim=512, num_heads=4, depth=2, sequence_length=5, num_focus=7, num_tokens=49, dropout=0.1):
         super().__init__()
         if feature_dim % num_heads != 0:
             raise ValueError("feature_dim must be divisible by num_heads.")
+        if depth < 1:
+            raise ValueError("depth must be >= 1.")
         self.feature_dim = feature_dim
         self.sequence_length = sequence_length
         self.num_focus = num_focus
         self.num_tokens = num_tokens
-        self.norm_q = nn.LayerNorm(feature_dim)
-        self.norm_kv = nn.LayerNorm(feature_dim)
-        self.cross_attention = nn.MultiheadAttention(feature_dim, num_heads, dropout=dropout, batch_first=True)
-        self.norm_ffn = nn.LayerNorm(feature_dim)
-        self.ffn = nn.Sequential(
-            nn.Linear(feature_dim, feature_dim * 2),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(feature_dim * 2, feature_dim),
-            nn.Dropout(dropout)
-        )
+        self.depth = depth
+        self.layers = nn.ModuleList([
+            TFFusionBlock(feature_dim=feature_dim, num_heads=num_heads, dropout=dropout)
+            for _ in range(depth)
+        ])
+        self.final_norm = nn.LayerNorm(feature_dim)
         self.token_score = nn.Linear(feature_dim, 1)
         self.frame_score = nn.Linear(feature_dim, 1)
 
@@ -52,10 +73,9 @@ class TF_fusion(nn.Module):
         spatial = spatial_feature.view(B, self.sequence_length, self.num_focus, self.num_tokens, D)
         temporal = temporal_feature.view(B, self.num_focus, self.sequence_length, self.num_tokens, D)
         query = spatial.permute(0, 2, 1, 3, 4).reshape(B * self.num_focus * self.sequence_length, self.num_tokens, D)
-        key_value = temporal.reshape(B * self.num_focus, self.sequence_length * self.num_tokens, D).unsqueeze(1).expand(B * self.num_focus, self.sequence_length, self.sequence_length * self.num_tokens, D)
+        key_value = temporal.reshape(B * self.num_focus, self.sequence_length * self.num_tokens, D)
+        key_value = key_value.unsqueeze(1).expand(B * self.num_focus, self.sequence_length, self.sequence_length * self.num_tokens, D)
         key_value = key_value.reshape(B * self.num_focus * self.sequence_length, self.sequence_length * self.num_tokens, D)
-        key_value = self.norm_kv(key_value)
-        query_norm = self.norm_q(query)
         key_padding_mask = None
         if temporal_mask is not None:
             if temporal_mask.shape != (B, self.sequence_length):
@@ -63,10 +83,12 @@ class TF_fusion(nn.Module):
             invalid = (~temporal_mask.bool()).unsqueeze(1).expand(B, self.num_focus, self.sequence_length)
             invalid = invalid.unsqueeze(-1).expand(B, self.num_focus, self.sequence_length, self.num_tokens)
             invalid = invalid.reshape(B * self.num_focus, self.sequence_length * self.num_tokens)
-            key_padding_mask = invalid.unsqueeze(1).expand(B * self.num_focus, self.sequence_length, self.sequence_length * self.num_tokens).reshape(B * self.num_focus * self.sequence_length, self.sequence_length * self.num_tokens)
-        fused, _ = self.cross_attention(query_norm, key_value, key_value, key_padding_mask=key_padding_mask, need_weights=False)
-        fused = query + fused
-        fused = fused + self.ffn(self.norm_ffn(fused))
+            key_padding_mask = invalid.unsqueeze(1).expand(B * self.num_focus, self.sequence_length, self.sequence_length * self.num_tokens)
+            key_padding_mask = key_padding_mask.reshape(B * self.num_focus * self.sequence_length, self.sequence_length * self.num_tokens)
+        fused = query
+        for layer in self.layers:
+            fused = layer(fused, key_value, key_padding_mask=key_padding_mask)
+        fused = self.final_norm(fused)
         fused = fused.view(B, self.num_focus, self.sequence_length, self.num_tokens, D).permute(0, 2, 1, 3, 4).contiguous()
         token_score = self.token_score(fused).squeeze(-1).reshape(B, self.sequence_length, self.num_focus * self.num_tokens)
         token_weight = torch.softmax(token_score, dim=-1)
@@ -79,7 +101,7 @@ class TF_fusion(nn.Module):
         return frame_features, sample_feature, token_weight, frame_weight
 
 if __name__ == "__main__":
-    model = TF_fusion()
+    model = TF_fusion(depth=2)
     spatial = torch.randn(10, 343, 512)
     temporal = torch.randn(14, 245, 512)
     mask = torch.ones(2, 5, dtype=torch.bool)

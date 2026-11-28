@@ -45,7 +45,7 @@ class HierarchicalFocusAttentionModel(nn.Module):
         self.coarse_embedding = CoarseEmbedding(sequence_length=sequence_length, num_focus=7, num_tokens=49, feature_dim=feature_dim, dropout=dropout)
         self.msfd_attention = MSFDAttention(feature_dim=feature_dim, num_heads=8, depth=num_layers, num_levels=3, num_points=4, num_focus=7, dropout=dropout)
         self.temporal_transformer = TemporalTransformer(feature_dim=feature_dim, num_heads=8, depth=num_layers, dropout=dropout, sequence_length=sequence_length, num_tokens=49)
-        self.tf_fusion = TF_fusion(feature_dim=feature_dim, num_heads=8, sequence_length=sequence_length, num_focus=7, num_tokens=49, dropout=dropout)
+        self.tf_fusion = TF_fusion(feature_dim=feature_dim, num_heads=8, depth=num_layers, sequence_length=sequence_length, num_focus=7, num_tokens=49, dropout=dropout)
         self.fine_heads = nn.ModuleDict({
             "pronuclear": ClassificationHead(in_features=feature_dim, hidden_features=256, kan_features=128, num_classes=pronuclear, dropout=dropout),
             "cleavage": ClassificationHead(in_features=feature_dim, hidden_features=256, kan_features=128, num_classes=cleavage, dropout=dropout),
